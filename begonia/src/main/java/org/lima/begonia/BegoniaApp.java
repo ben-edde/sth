@@ -2,6 +2,8 @@ package org.lima.begonia;
 
 import eu.hansolo.tilesfx.Tile;
 import eu.hansolo.tilesfx.TileBuilder;
+import eu.hansolo.tilesfx.colors.Bright;
+import eu.hansolo.tilesfx.colors.Dark;
 import eu.hansolo.tilesfx.tools.FlowGridPane;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
@@ -30,10 +32,13 @@ public class BegoniaApp extends Application
     private AnimationTimer timer;
 
     private Tile sparkLineTile;
+    private Tile barGaugeTile;
     double prev = 0;
     private SimpleDoubleProperty valueProperty;
     Runnable toRun;
     Thread bg;
+
+    float lastPeak = 0f;
 
     final ArrayDeque<Byte> globalBuffer = new ArrayDeque<>();
 
@@ -48,6 +53,31 @@ public class BegoniaApp extends Application
         valueProperty = new SimpleDoubleProperty(0);
         sparkLineTile = TileBuilder.create().skinType(Tile.SkinType.SPARK_LINE).prefSize(TILE_WIDTH, TILE_HEIGHT).title("Audio Input").gradientStops(new Stop(0, Tile.GREEN), new Stop(0.5, Tile.YELLOW), new Stop(1.0, Tile.RED)).strokeWithGradient(true).smoothing(false).minValue(-100).maxValue(100).build();
         sparkLineTile.valueProperty().bind(valueProperty);
+
+        barGaugeTile = TileBuilder.create()
+                .skinType(Tile.SkinType.BAR_GAUGE)
+                .prefSize(TILE_WIDTH, TILE_HEIGHT)
+                .minValue(0)
+                .maxValue(100)
+                .startFromZero(true)
+                .threshold(100)
+                .thresholdVisible(true)
+                .title("Audio Input")
+                .gradientStops(new Stop(0, Bright.BLUE),
+                        new Stop(0.1, Bright.BLUE_GREEN),
+                        new Stop(0.2, Bright.GREEN),
+                        new Stop(0.3, Bright.GREEN_YELLOW),
+                        new Stop(0.4, Bright.YELLOW),
+                        new Stop(0.5, Bright.YELLOW_ORANGE),
+                        new Stop(0.6, Bright.ORANGE),
+                        new Stop(0.7, Bright.ORANGE_RED),
+                        new Stop(0.8, Bright.RED),
+                        new Stop(1.0, Dark.RED))
+                .strokeWithGradient(true)
+                .animated(true)
+                .build();
+
+
         lastTimerCall = System.nanoTime();
         timer = new AnimationTimer()
         {
@@ -60,11 +90,44 @@ public class BegoniaApp extends Application
                     {
                         if (globalBuffer.size() != 0)
                         {
-                            var result = globalBuffer.stream().mapToLong(Byte::longValue).sum();
-                            var change = (result - prev) / prev * 100;
-                            valueProperty.set(change);
-                            prev = result;
-                            System.out.println(String.format("Change: [%6.2f]; Raw:[%d]", change, result));
+                            var sampleSize = globalBuffer.size() / 2;
+
+                            float[] samples = new float[sampleSize];
+
+                            for (int i = 0; i < sampleSize; ++i)
+                            {
+                                int sample = 0;
+                                sample |= globalBuffer.removeFirst() & 0xFF;
+                                sample |= globalBuffer.removeFirst() << 8;
+                                samples[i] = sample / 32767f;
+                            }
+
+                            float rms = 0f;
+                            float peak = 0f;
+                            for (float sample : samples)
+                            {
+
+                                float abs = Math.abs(sample);
+                                if (abs > peak)
+                                {
+                                    peak = abs;
+                                }
+
+                                rms += sample * sample;
+                            }
+
+                            rms = (float) Math.sqrt(rms / samples.length);
+
+                            if (lastPeak > peak)
+                            {
+                                peak = lastPeak * 0.875f;
+                            }
+
+                            lastPeak = peak;
+
+                            barGaugeTile.setThreshold(peak * 100);
+                            barGaugeTile.setValue(rms * 100);
+                            System.out.println(String.format("peak: [%6.2f]; rms:[%6.2f]", peak, rms));
                             globalBuffer.clear();
                         }
                     }
@@ -124,7 +187,7 @@ public class BegoniaApp extends Application
     @Override
     public void start(Stage stage) throws IOException
     {
-        FlowGridPane pane = new FlowGridPane(1, 1, sparkLineTile);
+        FlowGridPane pane = new FlowGridPane(1, 1, barGaugeTile);
         Scene scene = new Scene(pane);
         stage.setTitle("Begonia");
         stage.setScene(scene);
